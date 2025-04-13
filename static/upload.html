@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Signed URL Upload Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .progress {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        .hidden {
+            display: none;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:disabled {
+            background-color: #6c757d;
+        }
+        input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        label {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>GCS Signed URL Upload Test</h1>
+    <div class="container">
+        <div>
+            <label for="objectName">Object Name (path in bucket):</label>
+            <input type="text" id="objectName" placeholder="uploads/myfile.jpg">
+        </div>
+        
+        <div>
+            <label for="fileInput">Select File:</label>
+            <input type="file" id="fileInput">
+        </div>
+        
+        <div>
+            <label for="expirationMinutes">URL Expiration (minutes):</label>
+            <input type="text" id="expirationMinutes" value="30">
+        </div>
+        
+        <button id="uploadBtn">Upload to GCS</button>
+        
+        <div id="status" class="hidden"></div>
+        
+        <div id="resultContainer" class="hidden" style="margin-top: 20px;">
+            <h3>Upload Result:</h3>
+            <p>Public URL: <a id="publicUrl" href="#" target="_blank"></a></p>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadBtn').addEventListener('click', async () => {
+            const fileInput = document.getElementById('fileInput');
+            const objectNameInput = document.getElementById('objectName');
+            const expirationInput = document.getElementById('expirationMinutes');
+            const statusDiv = document.getElementById('status');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const resultContainer = document.getElementById('resultContainer');
+            const publicUrlLink = document.getElementById('publicUrl');
+            
+            // Reset status
+            statusDiv.className = 'progress';
+            statusDiv.classList.remove('hidden');
+            resultContainer.classList.add('hidden');
+            
+            // Validate inputs
+            if (!fileInput.files.length) {
+                statusDiv.textContent = 'Please select a file first';
+                statusDiv.className = 'error';
+                return;
+            }
+            
+            let objectName = objectNameInput.value.trim();
+            if (!objectName) {
+                // Default to file name if not specified
+                objectName = 'uploads/' + fileInput.files[0].name;
+                objectNameInput.value = objectName;
+            }
+            
+            const file = fileInput.files[0];
+            const expirationMinutes = parseInt(expirationInput.value) || 30;
+            
+            // Disable button during upload
+            uploadBtn.disabled = true;
+            
+            try {
+                // Update status
+                statusDiv.textContent = 'Getting signed URL...';
+                
+                // Get signed URL from your server
+                const response = await fetch('/generatesignedurl', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        object_name: objectName,
+                        content_type: file.type || 'application/octet-stream',
+                        expiration_minutes: expirationMinutes
+                    }),
+                });
+                
+                const data = await response.json();
+                if (!data.url) {
+                    throw new Error(data.error || 'Failed to get signed URL');
+                }
+                
+                // Update status
+                statusDiv.textContent = 'Uploading file to GCS...';
+                
+                // Upload to GCS with signed URL
+                const uploadResponse = await fetch(data.url, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': file.type || 'application/octet-stream',
+                    },
+                    body: file,
+                });
+                
+                if (uploadResponse.ok) {
+                    // Calculate the public URL (this assumes public bucket)
+                    const bucketName = "oms_assets_dev";
+                    const publicUrl = 'https://storage.googleapis.com/' + bucketName + '/' + objectName;
+                    
+                    // Show success
+                    statusDiv.textContent = 'Upload successful!';
+                    statusDiv.className = 'success';
+                    
+                    // Show result
+                    publicUrlLink.textContent = publicUrl;
+                    publicUrlLink.href = publicUrl;
+                    resultContainer.classList.remove('hidden');
+                } else {
+                    throw new Error('Upload failed: ' + uploadResponse.status + ' ' + uploadResponse.statusText);
+                }
+            } catch (error) {
+                statusDiv.textContent = 'Error: ' + error.message;
+                statusDiv.className = 'error';
+                console.error(error);
+            } finally {
+                // Re-enable upload button
+                uploadBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
