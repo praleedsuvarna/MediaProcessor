@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bulk Upload to GCS</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        #fileList {
+            margin-top: 10px;
+        }
+        .file-item {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #eee;
+            border-radius: 3px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .file-item .file-name {
+            flex-grow: 1;
+        }
+        .file-item .file-size {
+            color: #666;
+            margin: 0 10px;
+        }
+        .file-item .file-status {
+            min-width: 80px;
+            text-align: center;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .pending {
+            background-color: #e2e3e5;
+            color: #383d41;
+        }
+        .uploading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .progress-bar {
+            height: 5px;
+            width: 100%;
+            background-color: #eee;
+            margin-top: 5px;
+        }
+        .progress-bar-filled {
+            height: 100%;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:disabled {
+            background-color: #6c757d;
+        }
+        input[type="text"], input[type="file"], select {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        label {
+            font-weight: bold;
+        }
+        .summary {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .upload-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 15px;
+        }
+        #uploadResults {
+            margin-top: 20px;
+        }
+        #debug {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: auto;
+            max-height: 200px;
+            display: none;
+        }
+        .toggle-debug {
+            margin-top: 10px;
+            color: #007bff;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Bulk Upload to Google Cloud Storage</h1>
+    
+    <div class="container">
+        <div>
+            <label for="folderPath">Folder Path in Bucket (optional):</label>
+            <input type="text" id="folderPath" placeholder="experience/">
+            <p><small>All files will be uploaded to this folder path. Leave empty to upload to bucket root.</small></p>
+        </div>
+        
+        <div>
+            <label for="fileInput">Select Multiple Files:</label>
+            <input type="file" id="fileInput" multiple>
+        </div>
+        
+        <div>
+            <label for="uploadMethod">Upload Method:</label>
+            <select id="uploadMethod">
+                <option value="individual">Individual Upload (Reliable)</option>
+                <option value="batch">Batch Upload (Default)</option>
+                <option value="compatible-batch">Enhanced Batch Upload (New - Requires Server Update)</option>
+            </select>
+        </div>
+        
+        <div id="fileList"></div>
+        
+        <div class="upload-controls">
+            <div>
+                <button id="uploadBtn" disabled>Upload All Files</button>
+                <button id="clearBtn" disabled>Clear Files</button>
+            </div>
+            <div>
+                <span id="uploadStatus"></span>
+            </div>
+        </div>
+        
+        <div class="toggle-debug" onclick="toggleDebug()">Show Debug Info</div>
+        <div id="debug"></div>
+    </div>
+    
+    <div id="uploadResults" class="container" style="display: none;">
+        <h3>Upload Results</h3>
+        <div class="summary">
+            <div id="successCount">Successful uploads: 0</div>
+            <div id="failureCount">Failed uploads: 0</div>
+        </div>
+        <div id="completedList"></div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const folderPath = document.getElementById('folderPath');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const uploadResults = document.getElementById('uploadResults');
+        const successCount = document.getElementById('successCount');
+        const failureCount = document.getElementById('failureCount');
+        const completedList = document.getElementById('completedList');
+        const uploadMethod = document.getElementById('uploadMethod');
+        const debugPanel = document.getElementById('debug');
+        
+        let selectedFiles = [];
+        let uploadedCount = 0;
+        let successfulCount = 0;
+        let failedCount = 0;
+        let isUploading = false;
+        
+        // Debug helper function
+        function logDebug(message, data) {
+            const timestamp = new Date().toISOString().substr(11, 8);
+            const logItem = document.createElement('div');
+            logItem.innerHTML = `<strong>[${timestamp}]</strong> ${message}`;
+            
+            if (data) {
+                const pre = document.createElement('pre');
+                pre.textContent = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+                logItem.appendChild(pre);
+            }
+            
+            debugPanel.appendChild(logItem);
+            debugPanel.scrollTop = debugPanel.scrollHeight;
+            console.log(message, data || '');
+        }
+        
+        function toggleDebug() {
+            debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
+        }
+        
+        // Handle file selection
+        fileInput.addEventListener('change', function() {
+            selectedFiles = Array.from(fileInput.files);
+            updateFileList();
+            updateButtons();
+            
+            logDebug(`Selected ${selectedFiles.length} files`, 
+                selectedFiles.map(f => ({ name: f.name, type: f.type, size: formatFileSize(f.size) })));
+        });
+        
+        // Update the file list display
+        function updateFileList() {
+            fileList.innerHTML = '';
+            
+            selectedFiles.forEach((file, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item pending';
+                fileItem.dataset.index = index;
+                
+                const fileName = document.createElement('div');
+                fileName.className = 'file-name';
+                fileName.textContent = file.name;
+                
+                const fileSize = document.createElement('div');
+                fileSize.className = 'file-size';
+                fileSize.textContent = formatFileSize(file.size);
+                
+                const fileStatus = document.createElement('div');
+                fileStatus.className = 'file-status';
+                fileStatus.textContent = 'Pending';
+                
+                const progressBar = document.createElement('div');
+                progressBar.className = 'progress-bar';
+                
+                const progressFill = document.createElement('div');
+                progressFill.className = 'progress-bar-filled';
+                
+                progressBar.appendChild(progressFill);
+                fileItem.appendChild(fileName);
+                fileItem.appendChild(fileSize);
+                fileItem.appendChild(fileStatus);
+                fileItem.appendChild(progressBar);
+                
+                fileList.appendChild(fileItem);
+            });
+        }
+        
+        // Format file size for display
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+        
+        // Update button states
+        function updateButtons() {
+            uploadBtn.disabled = selectedFiles.length === 0 || isUploading;
+            clearBtn.disabled = selectedFiles.length === 0 || isUploading;
+        }
+        
+        // Upload file using fetch - simplified to match single upload
+        async function uploadFileWithFetch(file, signedUrl) {
+            logDebug(`Starting upload for ${file.name} with content type: ${file.type || 'application/octet-stream'}`);
+            
+            try {
+                // Use the same approach as the working single file upload
+                const response = await fetch(signedUrl, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': file.type || 'application/octet-stream'
+                    },
+                    body: file
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+                }
+                
+                logDebug(`Upload successful for ${file.name}`);
+                return response;
+            } catch (error) {
+                logDebug(`Upload error for ${file.name}:`, error.message);
+                throw error;
+            }
+        }
+        
+        // Get signed URL for a single file
+        async function getSignedUrlForFile(objectPath, contentType) {
+            logDebug(`Getting signed URL for ${objectPath} with content type: ${contentType}`);
+            
+            const response = await fetch('/generatesignedurl', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    object_name: objectPath,
+                    content_type: contentType,
+                    expiration_minutes: 30
+                }),
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to get signed URL: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (!data.url) {
+                throw new Error(data.error || 'No signed URL received');
+            }
+            
+            logDebug(`Received signed URL for ${objectPath}`);
+            return data.url;
+        }
+        
+        // Get batch signed URLs for multiple files
+        async function getBatchSignedUrls(objectPaths, contentType) {
+            logDebug(`Getting batch signed URLs for ${objectPaths.length} files`);
+            
+            const response = await fetch('/generatebatchsignedurls', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    object_names: objectPaths,
+                    content_type: contentType,
+                    expiration_minutes: 30
+                }),
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to get batch signed URLs: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (!data.urls || Object.keys(data.urls).length === 0) {
+                throw new Error('No signed URLs received');
+            }
+            
+            logDebug(`Received ${Object.keys(data.urls).length} batch signed URLs`);
+            return data.urls;
+        }
+        
+        // Get compatible batch signed URLs for multiple files with per-file content types
+        async function getCompatibleBatchSignedUrls(files, objectPaths) {
+            logDebug(`Getting compatible batch signed URLs for ${objectPaths.length} files`);
+            
+            // Create items array with object names and content types
+            const items = files.map((file, index) => ({
+                object_name: objectPaths[index],
+                content_type: file.type || 'application/octet-stream'
+            }));
+            
+            // Call the compatible batch endpoint
+            const response = await fetch('/generatecompatiblebatchsignedurls', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    items: items,
+                    expiration_minutes: 30
+                }),
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Failed to get compatible batch signed URLs: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (!data.urls || Object.keys(data.urls).length === 0) {
+                throw new Error('No signed URLs received');
+            }
+            
+            logDebug(`Received ${Object.keys(data.urls).length} compatible batch signed URLs`);
+            return data.urls;
+        }
+        
+        // Process a single file upload
+        async function processFileUpload(file, index, objectPath) {
+            const fileItem = fileList.querySelector(`[data-index="${index}"]`);
+            const statusElement = fileItem.querySelector('.file-status');
+            const progressFill = fileItem.querySelector('.progress-bar-filled');
+            
+            fileItem.className = 'file-item uploading';
+            statusElement.textContent = 'Uploading';
+            progressFill.style.width = '25%';
+            
+            try {
+                // Get content type with fallback
+                const contentType = file.type || 'application/octet-stream';
+                
+                // Get signed URL - either individually or from the batch result
+                let signedUrl;
+                if (uploadMethod.value === 'individual') {
+                    signedUrl = await getSignedUrlForFile(objectPath, contentType);
+                    progressFill.style.width = '50%';
+                } else {
+                    // This is expected to be provided by the calling function for batch mode
+                    signedUrl = file.signedUrl;
+                    if (!signedUrl) {
+                        throw new Error('No signed URL provided for this file');
+                    }
+                }
+                
+                // Upload the file
+                await uploadFileWithFetch(file, signedUrl);
+                
+                // Update UI for success
+                fileItem.className = 'file-item success';
+                statusElement.textContent = 'Success';
+                progressFill.style.width = '100%';
+                successfulCount++;
+                
+                // Add to completed list
+                const bucketName = "oms_assets_dev"; // You might want to make this configurable
+                const listItem = document.createElement('div');
+                listItem.className = 'file-item success';
+                listItem.innerHTML = `
+                    <div class="file-name">${file.name}</div>
+                    <div class="file-size">${formatFileSize(file.size)}</div>
+                    <a href="https://storage.googleapis.com/${bucketName}/${objectPath}" target="_blank">View</a>
+                `;
+                completedList.appendChild(listItem);
+                
+                return true;
+            } catch (error) {
+                // Update UI for error
+                fileItem.className = 'file-item error';
+                statusElement.textContent = 'Failed';
+                progressFill.style.width = '0%';
+                failedCount++;
+                
+                // Add to completed list
+                const listItem = document.createElement('div');
+                listItem.className = 'file-item error';
+                listItem.innerHTML = `
+                    <div class="file-name">${file.name}</div>
+                    <div class="file-size">${formatFileSize(file.size)}</div>
+                    <div class="file-status">Error: ${error.message}</div>
+                `;
+                completedList.appendChild(listItem);
+                
+                logDebug(`Error processing file ${file.name}:`, error);
+                return false;
+            }
+        }
+        
+        // Individual upload approach - more reliable but slower
+        async function performIndividualUploads(files, objectPaths) {
+            for (let i = 0; i < files.length; i++) {
+                await processFileUpload(files[i], i, objectPaths[i]);
+                uploadedCount++;
+                uploadStatus.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
+            }
+        }
+        
+        // Batch upload approach - faster but might have issues
+        async function performBatchUploads(files, objectPaths) {
+            try {
+                // Get all signed URLs at once
+                const urls = await getBatchSignedUrls(objectPaths, 'application/octet-stream');
+                
+                // Check if we got URLs for all files
+                const missingUrls = objectPaths.filter(path => !urls[path]);
+                if (missingUrls.length > 0) {
+                    logDebug(`Missing URLs for ${missingUrls.length} files:`, missingUrls);
+                }
+                
+                // Attach the signed URLs to each file object
+                for (let i = 0; i < files.length; i++) {
+                    files[i].signedUrl = urls[objectPaths[i]];
+                }
+                
+                // Process files one by one
+                for (let i = 0; i < files.length; i++) {
+                    await processFileUpload(files[i], i, objectPaths[i]);
+                    uploadedCount++;
+                    uploadStatus.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
+                }
+            } catch (error) {
+                logDebug("Batch upload error:", error.message);
+                uploadStatus.textContent = `Error: ${error.message}. Falling back to individual uploads.`;
+                
+                // Fall back to individual uploads
+                return performIndividualUploads(files, objectPaths);
+            }
+        }
+        
+        // Compatible batch upload approach - combines reliability of individual with speed of batch
+        async function performCompatibleBatchUploads(files, objectPaths) {
+            try {
+                // Get all signed URLs at once with per-file content types
+                const urls = await getCompatibleBatchSignedUrls(files, objectPaths);
+                
+                // Check if we got URLs for all files
+                const missingUrls = objectPaths.filter(path => !urls[path]);
+                if (missingUrls.length > 0) {
+                    logDebug(`Missing URLs for ${missingUrls.length} files:`, missingUrls);
+                }
+                
+                // Attach the signed URLs to each file object
+                for (let i = 0; i < files.length; i++) {
+                    files[i].signedUrl = urls[objectPaths[i]];
+                }
+                
+                // Process files one by one
+                for (let i = 0; i < files.length; i++) {
+                    await processFileUpload(files[i], i, objectPaths[i]);
+                    uploadedCount++;
+                    uploadStatus.textContent = `Uploaded ${uploadedCount} of ${files.length} files`;
+                }
+            } catch (error) {
+                logDebug("Compatible batch upload error:", error.message);
+                uploadStatus.textContent = `Error: ${error.message}. Falling back to individual uploads.`;
+                
+                // Fall back to individual uploads
+                return performIndividualUploads(files, objectPaths);
+            }
+        }
+        
+        // Handle the upload button click
+        uploadBtn.addEventListener('click', async function() {
+            if (selectedFiles.length === 0) return;
+            
+            isUploading = true;
+            updateButtons();
+            uploadStatus.textContent = 'Preparing upload...';
+            uploadedCount = 0;
+            successfulCount = 0;
+            failedCount = 0;
+            uploadResults.style.display = 'none';
+            completedList.innerHTML = '';
+            debugPanel.innerHTML = '';
+            
+            // Reset file statuses
+            Array.from(fileList.querySelectorAll('.file-item')).forEach(item => {
+                item.className = 'file-item pending';
+                item.querySelector('.file-status').textContent = 'Pending';
+                item.querySelector('.progress-bar-filled').style.width = '0%';
+            });
+            
+            // Generate object paths
+            const basePath = folderPath.value.trim();
+            const objectPaths = selectedFiles.map(file => {
+                return basePath ? 
+                    (basePath.endsWith('/') ? basePath + file.name : basePath + '/' + file.name) : 
+                    file.name;
+            });
+            
+            logDebug(`Starting upload of ${selectedFiles.length} files using ${uploadMethod.value} method`);
+            
+            try {
+                // Use the selected upload method
+                if (uploadMethod.value === 'individual') {
+                    await performIndividualUploads(selectedFiles, objectPaths);
+                } else if (uploadMethod.value === 'compatible-batch') {
+                    await performCompatibleBatchUploads(selectedFiles, objectPaths);
+                } else {
+                    await performBatchUploads(selectedFiles, objectPaths);
+                }
+                
+                // Update summary
+                successCount.textContent = `Successful uploads: ${successfulCount}`;
+                failureCount.textContent = `Failed uploads: ${failedCount}`;
+                uploadResults.style.display = 'block';
+                
+                if (successfulCount === selectedFiles.length) {
+                    uploadStatus.textContent = `All ${successfulCount} files uploaded successfully!`;
+                } else {
+                    uploadStatus.textContent = `Completed: ${successfulCount} successful, ${failedCount} failed`;
+                }
+                
+            } catch (error) {
+                uploadStatus.textContent = 'Error: ' + error.message;
+                logDebug('Upload process error:', error.message);
+            }
+            
+            isUploading = false;
+            updateButtons();
+        });
+        
+        // Handle clear button click
+        clearBtn.addEventListener('click', function() {
+            fileInput.value = '';
+            selectedFiles = [];
+            fileList.innerHTML = '';
+            updateButtons();
+            uploadStatus.textContent = '';
+            uploadResults.style.display = 'none';
+            debugPanel.innerHTML = '';
+        });
+    </script>
+</body>
+</html>

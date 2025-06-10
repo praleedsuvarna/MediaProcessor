@@ -1,0 +1,12 @@
+{
+    "enable_gcp_upload": true,
+    "delete_local_after_upload": true,
+    "gcp_bucket_name": "soul_assets_dev",
+    "gcp_bucket_path": "experiences",
+    "gcp_service_account_key_path": "gcpupload/mrcontent-uploader-key.json",
+    "video_resolutions": [5760, 2880, 2160, 1440, 1088, 720, 480],
+    "image_size": 720,
+    "video_size": 720,
+    "video_crf": 28,
+    "workers": 2
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://mysoul.guru",
+      "https://api.mysoul.guru"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "responseHeader": [
+      "Content-Type", 
+      "Content-Length", 
+      "Content-Disposition",
+      "Content-Encoding",
+      "Date", 
+      "ETag",
+      "X-Goog-Meta-*",
+      "x-goog-*",
+      "Access-Control-Allow-Origin",
+      "Access-Control-Allow-Methods",
+      "Access-Control-Allow-Headers",
+      "Access-Control-Expose-Headers",
+      "Access-Control-Max-Age"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
